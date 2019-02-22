@@ -1,4 +1,5 @@
 RELEASE_TYPE: patch
 
-This release is a purely internal refactoring of Hypothesis's API for representing test cases.
-There should be no user visible effect.
+This release allows Hypothesis to calculate a number of attributes of generated test cases lazily.
+This should significantly reduce memory usage and modestly improve performance,
+especially for large test cases.
