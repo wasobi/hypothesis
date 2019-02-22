@@ -400,12 +400,8 @@ class Shrinker(object):
 
         self.debug("Shrink Pass %s" % (sp.name,))
         try:
-            sp.runs += 1
-
-            steps = sp.generate_steps()
-            self.random.shuffle(steps)
-            for s in steps:
-                sp.run_step(s)
+            while sp.step():
+                pass
         finally:
             self.debug("Shrink Pass %s completed." % (sp.name,))
 
@@ -544,17 +540,9 @@ class Shrinker(object):
         is a fixed point of all of them."""
         passes = list(map(self.shrink_pass, passes))
 
-        initial = None
-        while initial is not self.shrink_target:
-            initial = self.shrink_target
-            for sp in passes:
-                if sp.arguments:
-                    sp.runs += 1
-
-            passes_with_steps = [
-                (sp, step) for sp in passes for step in sp.generate_steps()
-            ]
-            self.random.shuffle(passes_with_steps)
+        any_ran = True
+        while any_ran:
+            any_ran = False
 
             # We run remove_discarded after every step to do cleanup
             # keeping track of whether that actually works. Either there is
@@ -564,12 +552,10 @@ class Shrinker(object):
             # try again once all of the passes have been run.
             can_discard = self.remove_discarded()
 
-            for sp, step in passes_with_steps:
-                sp.run_step(step)
+            for sp in passes:
+                any_ran |= sp.step()
                 if can_discard:
                     can_discard &= self.remove_discarded()
-        for sp in passes:
-            sp.fixed_point_at = self.shrink_target
 
     @property
     def buffer(self):
@@ -1309,6 +1295,11 @@ def block_program(description):
     return name
 
 
+class KeyReturningDict(defaultdict):
+    def __missing__(self, key):
+        return key
+
+
 @attr.s(slots=True, cmp=False)
 class ShrinkPass(object):
     run_with_arguments = attr.ib()
@@ -1318,6 +1309,9 @@ class ShrinkPass(object):
 
     __arguments = attr.ib(default=None, init=False)
     __target_at_argument_calculation = attr.ib(default=None, init=False)
+    __target_at_last_reset = attr.ib(default=None, init=False)
+    __progress = attr.ib(default=float('inf'), init=False)
+    __rebind = attr.ib(default=None, init=False)
 
     fixed_point_at = attr.ib(default=None)
     successes = attr.ib(default=0)
@@ -1333,10 +1327,25 @@ class ShrinkPass(object):
             self.__target_at_argument_calculation = self.shrinker.shrink_target
         return self.__arguments
 
-    def generate_steps(self):
-        if self.fixed_point_at is self.shrinker.shrink_target:
-            return []
-        return list(hrange(len(self.arguments)))
+    def step(self, allow_reset=True):
+        initial_calls = self.shrinker.calls
+        while self.shrinker.calls == initial_calls:
+            if not self.arguments:
+                return False
+            if self.__progress >= len(self.arguments):
+                if self.__target_at_last_reset is self.shrinker.shrink_target:
+                    return False
+                self.__target_at_last_reset = self.shrinker.shrink_target
+                self.__progress = 0
+                self.__rebind = KeyReturningDict()
+                self.runs += 1
+            i = self.__progress
+            self.__progress += 1
+            j = self.shrinker.random.randrange(i, len(self.arguments))
+            self.__rebind[i], self.__rebind[j] = self.__rebind[j], self.__rebind[i]
+            self.run_step(self.__rebind[i])
+        return True
+
 
     def run_step(self, i):
         if i >= len(self.arguments):
